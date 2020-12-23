@@ -3,6 +3,7 @@ import {
 	Exchange,
 	fetchExchange,
 	stringifyVariables,
+	gql,
 } from 'urql';
 import { pipe, tap } from 'wonka';
 import { cacheExchange, Resolver } from '@urql/exchange-graphcache';
@@ -13,8 +14,11 @@ import {
 	MeDocument,
 	LoginMutation,
 	RegisterMutation,
+	VoteMutationVariables,
+	DeletePostMutationVariables,
 } from '../generated/graphql';
 import { betterUpdateQuery } from './betterUpdateQuery';
+import { isServer } from './isServer';
 
 const errorExchange: Exchange = ({ forward }) => (ops$) => {
 	return pipe(
@@ -38,15 +42,24 @@ export const cursorPagination = (): Resolver => {
 			return undefined;
 		}
 		const fieldKey = `${fieldName}(${stringifyVariables(fieldArgs)})`;
-		const isItInTheCache = cache.resolveFieldByKey(entityKey, fieldKey);
+		const isItInTheCache = cache.resolve(
+			cache.resolveFieldByKey(entityKey, fieldKey) as string,
+			'posts',
+		);
 		info.partial = !isItInTheCache;
 		const results: string[] = [];
+		let hasMore = true;
 		fieldInfos.forEach((fi) => {
-			const data = cache.resolveFieldByKey(entityKey, fi.fieldKey) as string[];
+			const key = cache.resolveFieldByKey(entityKey, fi.fieldKey) as string;
+			const data = cache.resolve(key, 'posts') as string[];
+			const _hasMore = cache.resolve(key, 'hasMore') as boolean;
+			if (!_hasMore) {
+				hasMore = _hasMore;
+			}
 			results.push(...data);
 		});
 
-		return results;
+		return { __typename: 'PaginatedPosts', posts: results, hasMore };
 
 		// const visited = new Set();
 		// let result: NullArray<string> = [];
@@ -102,12 +115,22 @@ export const cursorPagination = (): Resolver => {
 	};
 };
 
-export const createUrqlClient = (ssrExchange: any) => ({
+export const createUrqlClient = (ssrExchange: any, ctx: any) => ({
 	url: 'http://localhost:4000/graphql',
-	fetchOptions: { credentials: 'include' as const },
+	fetchOptions: {
+		credentials: 'include' as const,
+		headers: isServer()
+			? ctx?.req?.headers?.cookie
+				? { cookie: ctx?.req?.headers?.cookie }
+				: undefined
+			: undefined,
+	},
 	exchanges: [
 		dedupExchange,
 		cacheExchange({
+			keys: {
+				PaginatedPosts: () => null,
+			},
 			resolvers: {
 				Query: {
 					posts: cursorPagination(),
@@ -115,6 +138,54 @@ export const createUrqlClient = (ssrExchange: any) => ({
 			},
 			updates: {
 				Mutation: {
+					deletePost: (_result, args, cache, info) => {
+						cache.invalidate({
+							__typename: 'Post',
+							id: (args as DeletePostMutationVariables).id,
+						});
+					},
+					vote: (_result, args, cache, info) => {
+						const { postId, value } = args as VoteMutationVariables;
+						const data = cache.readFragment(
+							gql`
+								fragment _ on Post {
+									id
+									points
+									voteStatus
+								}
+							`,
+							{ id: postId },
+						);
+						if (data) {
+							if (data.voteStatus === value) {
+								return;
+							}
+							const newPoints =
+								(data.points as number) + (!data.voteStatus ? 1 : 2) * value;
+							cache.writeFragment(
+								gql`
+									fragment _ on Post {
+										points
+										voteStatus
+									}
+								`,
+								{
+									id: postId,
+									points: newPoints,
+									voteStatus: value,
+								},
+							);
+						}
+					},
+					create: (_result, args, cache, info) => {
+						const allFields = cache.inspectFields('Query');
+						const fieldInfos = allFields.filter(
+							(info) => info.fieldName === 'posts',
+						);
+						fieldInfos.forEach((fi) => {
+							cache.invalidate('Query', 'posts', fi.arguments || {});
+						});
+					},
 					logout: (_result, args, cache, info) => {
 						betterUpdateQuery<LogoutMutation, MeQuery>(
 							cache,
@@ -123,6 +194,7 @@ export const createUrqlClient = (ssrExchange: any) => ({
 							() => ({ me: null }),
 						);
 					},
+					// @ts-ignore
 					login: (_result: LoginMutation, args, cache, info) => {
 						betterUpdateQuery<LoginMutation, MeQuery>(
 							cache,
@@ -141,6 +213,7 @@ export const createUrqlClient = (ssrExchange: any) => ({
 							},
 						);
 					},
+					// @ts-ignore
 					register: (_result: RegisterMutation, args, cache, info) => {
 						betterUpdateQuery<RegisterMutation, MeQuery>(
 							cache,
