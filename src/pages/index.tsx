@@ -1,5 +1,4 @@
-import React, { useState } from 'react';
-import { withUrqlClient } from 'next-urql';
+import React from 'react';
 import {
 	Box,
 	Button,
@@ -10,27 +9,27 @@ import {
 	Text,
 } from '@chakra-ui/react';
 import NextLink from 'next/link';
-import { createUrqlClient } from '../utils/createUrqlClient';
 import { useMeQuery, usePostsQuery } from '../generated/graphql';
 import Layout from '../components/Layout';
-import UpdootSection from '../components/UpdootSectios';
+import UpdootSection from '../components/UpdootSection';
 import EditDeletePostButtons from '../components/EditDeletePostButtons';
+import { withApollo } from '../utils/withApollo';
 
 const Index = () => {
-	const [variables, setVariables] = useState({
-		limit: 10,
-		cursor: null as null | string,
+	const { data: meData } = useMeQuery();
+	const { data, error, loading, fetchMore, variables } = usePostsQuery({
+		variables: {
+			limit: 10,
+			cursor: null,
+		},
+		notifyOnNetworkStatusChange: true,
 	});
-	const [{ data: meData }] = useMeQuery();
-	const [{ data, error, fetching }] = usePostsQuery({
-		variables,
-	});
-	if (!fetching && !data) {
+	if (!loading && !data) {
 		return <div>{error?.message}</div>;
 	}
 	return (
 		<Layout>
-			{!data && fetching ? (
+			{!data && loading ? (
 				<div>Loading...</div>
 			) : (
 				<Stack>
@@ -64,13 +63,16 @@ const Index = () => {
 			{data && data.posts.hasMore ? (
 				<Flex>
 					<Button
-						isLoading={fetching}
+						isLoading={loading}
 						m='auto'
 						my={8}
 						onClick={() => {
-							setVariables({
-								limit: variables.limit,
-								cursor: data.posts.posts[data.posts.posts.length - 1].createdAt,
+							fetchMore({
+								variables: {
+									limit: variables?.limit,
+									cursor:
+										data.posts.posts[data.posts.posts.length - 1].createdAt,
+								},
 							});
 						}}
 					>
@@ -82,6 +84,4 @@ const Index = () => {
 	);
 };
 
-// * make this page into a server side rendered page, cause this page does contains dynamic data
-// * if the page contains only static content then there is no need for ssr: true
-export default withUrqlClient(createUrqlClient, { ssr: true })(Index);
+export default withApollo({ ssr: true })(Index);

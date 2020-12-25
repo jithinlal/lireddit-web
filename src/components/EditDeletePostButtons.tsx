@@ -11,7 +11,7 @@ interface EditDeletePostButtonsProps {
 const EditDeletePostButtons: React.FC<EditDeletePostButtonsProps> = ({
 	id,
 }) => {
-	const [, deletePost] = useDeletePostMutation();
+	const [deletePost] = useDeletePostMutation();
 	return (
 		<Box>
 			<NextLink href='/post/edit/id' as={`/post/edit/${id}`}>
@@ -30,7 +30,16 @@ const EditDeletePostButtons: React.FC<EditDeletePostButtonsProps> = ({
 				aria-label='delete post'
 				icon={<DeleteIcon />}
 				onClick={() => {
-					deletePost({ id });
+					deletePost({
+						variables: {
+							id,
+						},
+						update: (cache) => {
+							cache.evict({
+								id: 'Post:' + id,
+							});
+						},
+					});
 				}}
 			/>
 		</Box>
